@@ -11,14 +11,15 @@ COPY package*.json ./
 # Install all dependencies (including devDependencies like tsx, prisma)
 RUN npm install
 
-# Copy Prisma configuration and schema to generate the typed client
-COPY prisma ./prisma
-COPY prisma.config.ts ./
-RUN npx prisma generate
-
-# Copy source code and configs
+# Copy configuration, schema, and source files
+# Note: tsconfig.json MUST be present before `prisma generate` so Prisma ORM 7 detects moduleResolution: NodeNext and generates valid .js ESM imports
 COPY tsconfig.json ./
+COPY prisma.config.ts ./
+COPY prisma ./prisma
 COPY src ./src
+
+# Generate Prisma Client with NodeNext ESM module resolution
+RUN npx prisma generate
 
 # Compile TypeScript to JavaScript in dist/
 RUN npm run build
