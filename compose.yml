@@ -1,0 +1,92 @@
+name: finance
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: finance-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+    # Exposed database port for host GUI clients (Prisma Studio, DBeaver, TablePlus)
+    ports:
+      - "5433:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+    volumes:
+      - finance_data:/var/lib/postgresql/data
+
+    networks:
+      - finance_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: finance-redis
+    restart: unless-stopped
+
+    # Internal cache port. Uncomment below only if connecting via external GUI (e.g. RedisInsight)
+    # ports:
+    #   - "6379:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+    volumes:
+      - finance_redis_data:/data
+
+    networks:
+      - finance_network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: finance-api
+    restart: unless-stopped
+    command: npm run dev
+    env_file:
+      - .env
+
+    ports:
+      - "5000:5000"
+
+    environment:
+      TZ: ${TZ:-Asia/Kolkata}
+      ENABLE_VERBOSE_LOGS: ${ENABLE_VERBOSE_LOGS:-false}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - finance_network
+
+volumes:
+  finance_data:
+    name: finance-data
+  finance_redis_data:
+    name: finance-redis-data
+
+networks:
+  finance_network:
+    name: finance-network

@@ -1,0 +1,199 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String              @id @default(uuid())
+  name           String
+  email          String              @unique
+  password       String
+  dob            DateTime?
+  profileImage   String?
+  profileImageId String?
+  isOnboarding   Boolean             @default(true)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  isDeleted      Boolean             @default(false)
+  deletedAt      DateTime?
+  deletedBy      String?
+  settings       UserSettings?
+  allowances     MonthlyAllowance[]
+  incomes        Income[]
+  expenses       Expense[]
+  categories     UserCategory[]
+  paymentMethods UserPaymentMethod[]
+  reflectReports ReflectReport[]
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+}
+
+enum PaymentMethod {
+  CASH
+  CREDIT_CARD
+  DEBIT_CARD
+  BANK_TRANSFER
+  OTHER
+}
+
+enum IncomeSource {
+  SALARY
+  INVESTMENT
+  PART_TIME
+  FREELANCE
+  BONUS
+  GIFT
+  BUSINESS
+  OTHER
+}
+
+enum ExpenseCategory {
+  SHOPPING
+  FOOD
+  PHONE
+  ENTERTAINMENT
+  EDUCATION
+  BEAUTY
+  TRANSPORTATION
+  CLOTHING
+  VEHICLE
+  DRINKS
+  CIGARRETES
+  ELECTRONICS
+  TRAVEL
+  HEALTH
+  PETS
+  REPAIRS
+  HOUSING
+  SNACKS
+  GROCERIES
+  PERSONAL
+  OTHER
+}
+
+model UserSettings {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  currencySymbol           String    @default("")
+  monthlyStartingAllowance Float     @default(0)
+  defaultPaymentMethod     String?
+  selectedMonth            String?
+  createdAt                DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  isDeleted      Boolean   @default(false)
+  deletedAt      DateTime?
+  deletedBy      String?
+}
+
+model MonthlyAllowance {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  year       Int
+  month      Int
+  amount     Float
+  isRollover Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  isDeleted  Boolean   @default(false)
+  deletedAt  DateTime?
+  deletedBy  String?
+
+  @@unique([userId, year, month])
+}
+
+model UserCategory {
+  id        String       @id @default(uuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  type      CategoryType
+  icon      String       @default("Briefcase")
+  color     String       @default("#6366F1")
+  isSystem  Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  isDeleted Boolean      @default(false)
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([userId, type, isDeleted])
+}
+
+model UserPaymentMethod {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  icon      String    @default("CreditCard")
+  isSystem  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([userId, isDeleted])
+}
+
+model Income {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  year          Int
+  month         Int
+  amount        Float
+  source        String
+  date          DateTime
+  paymentMethod String
+  notes         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  isDeleted     Boolean   @default(false)
+  deletedAt     DateTime?
+  deletedBy     String?
+}
+
+model Expense {
+  id            String    @id @default(uuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  year          Int
+  month         Int
+  amount        Float
+  category      String
+  date          DateTime
+  paymentMethod String
+  description   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  isDeleted     Boolean   @default(false)
+  deletedAt     DateTime?
+  deletedBy     String?
+}
+
+model ReflectReport {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  year      Int
+  month     Int
+  data      Json
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  isDeleted Boolean   @default(false)
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@unique([userId, year, month])
+  @@index([userId, isDeleted])
+}
+

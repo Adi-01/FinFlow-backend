@@ -1,0 +1,49 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "Express + TypeScript API with JWT Authentication and Prisma",
+  "main": "dist/server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc && tsc-alias",
+    "start": "node dist/server.js",
+    "start:prod": "npx prisma migrate deploy && node dist/server.js",
+    "studio": "prisma studio --url postgresql://postgres:postgres@localhost:5433/finance"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "*",
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "7.10.0",
+    "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.11.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ioredis": "^6.0.0",
+    "jose": "^5.9.6",
+    "multer": "^2.4.0",
+    "pg": "^8.22.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.2.0",
+    "prisma": "7.10.0",
+    "tsc-alias": "^1.9.1",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.9.1": true,
+    "esbuild@0.28.2": true,
+    "prisma@7.9.1": true
+  },
+  "overrides": {
+    "deepmerge-ts": "^8.0.0"
+  }
+}

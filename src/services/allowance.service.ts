@@ -1,0 +1,166 @@
+import { prisma } from "@/lib/prisma.js";
+import { getCache, setCache, deleteCache } from "@/lib/redis.js";
+import type { Prisma } from "@/generated/prisma/client.js";
+import type {
+  GetAllowanceQueryInput,
+  SetAllowanceInput,
+} from "@/validators/allowance.validator.js";
+
+export const getOrComputeAllowanceService = async (
+  userId: string,
+  input: GetAllowanceQueryInput,
+) => {
+  const { year, month } = input;
+
+  return await prisma.$transaction(async (tx) => {
+    // 1. Check if allowance exists for active month
+    const existing = await tx.monthlyAllowance.findFirst({
+      where: {
+        userId,
+        year,
+        month,
+        isDeleted: false,
+      },
+    });
+
+    if (existing) {
+      return { allowance: existing, needsPrompt: false };
+    }
+
+    // 2. Fetch user settings for default monthly starting allowance
+    const userSettings = await tx.userSettings.findUnique({
+      where: { userId },
+    });
+
+    const defaultAllowance = userSettings?.monthlyStartingAllowance ?? 0;
+
+    // 3. If default allowance > 0, auto-initialize this month's allowance
+    if (defaultAllowance > 0) {
+      const newAllowance = await tx.monthlyAllowance.create({
+        data: {
+          userId,
+          year,
+          month,
+          amount: defaultAllowance,
+          isRollover: false,
+        },
+      });
+
+      await Promise.all([
+        deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
+        deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
+      ]);
+
+      return { allowance: newAllowance, needsPrompt: false };
+    }
+
+    // 4. If default allowance is 0 (or unset), prompt the user to configure
+    return { allowance: null, needsPrompt: true };
+  });
+};
+
+export const setOrUpdateAllowanceService = async (
+  userId: string,
+  input: SetAllowanceInput,
+) => {
+  const { year, month, amount } = input;
+
+  const allowance = await prisma.monthlyAllowance.upsert({
+    where: {
+      userId_year_month: {
+        userId,
+        year,
+        month,
+      },
+    },
+    update: {
+      amount,
+      isRollover: false,
+      isDeleted: false,
+      deletedAt: null,
+      deletedBy: null,
+    },
+    create: {
+      userId,
+      year,
+      month,
+      amount,
+      isRollover: false,
+    },
+  });
+
+  // Actively invalidate caches for this month
+  await Promise.all([
+    deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
+    deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
+  ]);
+
+  return allowance;
+};
+
+export const getAllowanceSummaryService = async (
+  userId: string,
+  input: GetAllowanceQueryInput,
+) => {
+  const { year, month } = input;
+  const cacheKey = `cache:allowance:summary:${userId}:${year}:${month}`;
+
+  // Check Redis Cache
+  const cached = await getCache<Record<string, unknown>>(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const allowanceData = await getOrComputeAllowanceService(userId, {
+    year,
+    month,
+  });
+
+  const startingAllowance = allowanceData.allowance
+    ? allowanceData.allowance.amount
+    : 0;
+
+  const incomeSum = await prisma.income.aggregate({
+    _sum: { amount: true },
+    where: {
+      userId,
+      year,
+      month,
+      isDeleted: false,
+    },
+  });
+
+  const expenseSum = await prisma.expense.aggregate({
+    _sum: { amount: true },
+    where: {
+      userId,
+      year,
+      month,
+      isDeleted: false,
+    },
+  });
+
+  const totalIncome = incomeSum._sum.amount || 0;
+  const totalExpense = expenseSum._sum.amount || 0;
+  const remainingBalance = startingAllowance + totalIncome - totalExpense;
+  const extraIncome =
+    remainingBalance > startingAllowance
+      ? remainingBalance - startingAllowance
+      : 0;
+
+  const result = {
+    year,
+    month,
+    startingAllowance,
+    totalIncome,
+    totalExpense,
+    remainingBalance,
+    extraIncome,
+    needsAllowancePrompt: allowanceData.needsPrompt,
+  };
+
+  // Populate Redis Cache (5 min TTL)
+  await setCache(cacheKey, result, 300);
+
+  return result;
+};
