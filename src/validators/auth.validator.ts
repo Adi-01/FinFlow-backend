@@ -17,6 +17,7 @@ export const registerSchema = z.object({
     .string()
     .min(6, "Password must be at least 6 characters long")
     .max(72, "Password must not exceed 72 characters"),
+  userAgent: z.string().max(500).optional(),
 });
 
 export const loginSchema = z.object({
@@ -30,6 +31,7 @@ export const loginSchema = z.object({
     .string()
     .min(1, "Password is required")
     .max(72, "Password must not exceed 72 characters"),
+  userAgent: z.string().max(500).optional(),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

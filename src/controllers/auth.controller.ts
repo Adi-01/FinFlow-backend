@@ -8,10 +8,12 @@ export const registerController = async (
 ) => {
   try {
     const userAgent =
-      (req.headers["x-forwarded-user-agent"] as string) ||
+      req.body.userAgent ||
       (req.headers["x-client-device"] as string) ||
-      req.headers["user-agent"] ||
-      "Unknown Device";
+      (req.headers["x-forwarded-user-agent"] as string) ||
+      (req.headers["user-agent"] && req.headers["user-agent"] !== "node"
+        ? req.headers["user-agent"]
+        : "Unknown Device");
     const ip =
       (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
       req.ip ||
@@ -31,10 +33,12 @@ export const loginController = async (
 ) => {
   try {
     const userAgent =
-      (req.headers["x-forwarded-user-agent"] as string) ||
+      req.body.userAgent ||
       (req.headers["x-client-device"] as string) ||
-      req.headers["user-agent"] ||
-      "Unknown Device";
+      (req.headers["x-forwarded-user-agent"] as string) ||
+      (req.headers["user-agent"] && req.headers["user-agent"] !== "node"
+        ? req.headers["user-agent"]
+        : "Unknown Device");
     const ip =
       (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
       req.ip ||
