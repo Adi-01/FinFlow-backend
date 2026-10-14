@@ -5,6 +5,7 @@ import {
   deleteCache,
   deleteCacheByPattern,
 } from "@/lib/redis.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
 import type { Prisma } from "@/generated/prisma/client.js";
 import type {
@@ -21,6 +22,7 @@ import {
 export const createIncomeService = async (
   userId: string,
   input: CreateIncomeInput,
+  originClientId?: string,
 ) => {
   const parsedDate = new Date(input.date);
   const year = parsedDate.getUTCFullYear();
@@ -47,6 +49,13 @@ export const createIncomeService = async (
     deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
     deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
   ]);
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "INCOME",
+    originClientId,
+    entityId: income.id,
+  });
 
   return income;
 };
@@ -176,6 +185,7 @@ export const updateIncomeService = async (
   userId: string,
   id: string,
   input: UpdateIncomeInput,
+  originClientId?: string,
 ) => {
   const existing = await prisma.income.findFirst({
     where: { id, userId, isDeleted: false },
@@ -236,10 +246,21 @@ export const updateIncomeService = async (
 
   await Promise.all(invalidations);
 
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "INCOME",
+    originClientId,
+    entityId: id,
+  });
+
   return updated;
 };
 
-export const deleteIncomeService = async (userId: string, id: string) => {
+export const deleteIncomeService = async (
+  userId: string,
+  id: string,
+  originClientId?: string,
+) => {
   const existing = await prisma.income.findFirst({
     where: { id, userId, isDeleted: false },
   });
@@ -269,6 +290,13 @@ export const deleteIncomeService = async (userId: string, id: string) => {
     deleteCache(`cache:dashboard:${userId}:${existing.year}:${existing.month}`),
     deleteCache(`cache:allowance:summary:${userId}:${existing.year}:${existing.month}`),
   ]);
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "INCOME",
+    originClientId,
+    entityId: id,
+  });
 
   return deleted;
 };

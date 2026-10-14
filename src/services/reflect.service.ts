@@ -3,9 +3,12 @@ import { ai } from "@/lib/gemini.js";
 import { getOrComputeAllowanceService } from "@/services/allowance.service.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
 import { BadRequestError } from "@/errors/BadRequestError.js";
+import { ConflictError } from "@/errors/ConflictError.js";
 import { UnprocessableEntityError } from "@/errors/UnprocessableEntityError.js";
 import { logger } from "@/lib/logger.js";
+import { redis } from "@/lib/redis.js";
 import { getRateLimitStatus, refundRateLimit } from "@/middleware/rateLimiter.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import {
   reflectReportDataSchema,
   type ReflectReportData,
@@ -191,6 +194,7 @@ export const getReflectReportService = async (
 export const generateReflectReportService = async (
   userId: string,
   input: GenerateReflectInput,
+  originClientId?: string,
 ) => {
   const { year, month, regenerate } = input;
 
@@ -246,6 +250,24 @@ export const generateReflectReportService = async (
       },
     });
   }
+
+  // Atomic generation lock to prevent concurrent double generation
+  const lockKey = `lock:reflect:${userId}:${year}:${month}`;
+  const acquired = await redis.set(lockKey, "1", "EX", 120, "NX");
+  if (!acquired) {
+    throw new ConflictError({
+      code: "REPORT_GENERATION_IN_PROGRESS",
+      message: "A reflection report is currently being generated for this month. Please wait a moment.",
+    });
+  }
+
+  // Notify other tabs that generation has started
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "REFLECT",
+    originClientId,
+    status: "GENERATING",
+  });
 
   const startingAllowance = allowanceData.allowance?.amount || 0;
   const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
@@ -471,6 +493,14 @@ Ensure "spending_habits", "purchases_to_note", and "ideas_for_next_month" each c
       },
     });
 
+    await publishSyncEvent(userId, {
+      type: "INVALIDATE",
+      scope: "REFLECT",
+      originClientId,
+      status: "COMPLETED",
+      entityId: savedReport.id,
+    });
+
     return {
       id: savedReport.id,
       year: savedReport.year,
@@ -481,13 +511,24 @@ Ensure "spending_habits", "purchases_to_note", and "ideas_for_next_month" each c
       cached: false,
     };
   } catch (error) {
+    await publishSyncEvent(userId, {
+      type: "INVALIDATE",
+      scope: "REFLECT",
+      originClientId,
+      status: "IDLE",
+    });
+
     // Automatically refund rate limit quota if generation failed
     await Promise.all([
       refundRateLimit("reflect:generate:daily", userId),
       refundRateLimit("reflect:generate:cooldown", userId),
     ]);
 
-    if (error instanceof UnprocessableEntityError || error instanceof BadRequestError) {
+    if (
+      error instanceof UnprocessableEntityError ||
+      error instanceof BadRequestError ||
+      error instanceof ConflictError
+    ) {
       throw error;
     }
     logger.error("Error executing Gemini API call for Reflect report", {
@@ -500,12 +541,15 @@ Ensure "spending_habits", "purchases_to_note", and "ideas_for_next_month" each c
       code: "AI_SERVICE_ERROR",
       message: "The AI service is momentarily unavailable. Please try again shortly.",
     });
+  } finally {
+    await redis.del(lockKey);
   }
 };
 
 export const chatReflectService = async (
   userId: string,
   input: ChatReflectInput,
+  originClientId?: string,
 ) => {
   const { reportId, message, history = [] } = input;
 
@@ -529,6 +573,24 @@ export const chatReflectService = async (
       message: "Reflect report not found.",
     });
   }
+
+  // Atomic mutex lock to prevent concurrent chat responses on the same report
+  const lockKey = `lock:reflect:chat:${reportId}`;
+  const acquired = await redis.set(lockKey, originClientId || "1", "EX", 45, "NX");
+  if (!acquired) {
+    throw new ConflictError({
+      code: "REPORT_CHAT_IN_PROGRESS",
+      message: "Another AI response is currently being generated. Please wait.",
+    });
+  }
+
+  // Broadcast CHATTING state so other open tabs/devices disable input
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "REFLECT",
+    status: "CHATTING",
+    originClientId,
+  });
 
   const currencySymbol = userSettings?.currencySymbol || "$";
   const reportData = report.data as ReflectReportData;
@@ -600,12 +662,31 @@ Rules:
       },
     });
 
+    // Notify other sessions that new chat messages are available and chatting is completed
+    await publishSyncEvent(userId, {
+      type: "INVALIDATE",
+      scope: "REFLECT",
+      status: "COMPLETED",
+      originClientId,
+    });
+
     return {
       reportId: report.id,
       reply,
       chatHistory: updatedChatHistory,
     };
   } catch (error) {
+    await publishSyncEvent(userId, {
+      type: "INVALIDATE",
+      scope: "REFLECT",
+      status: "IDLE",
+      originClientId,
+    });
+
+    if (error instanceof ConflictError) {
+      throw error;
+    }
+
     logger.error("Error generating chat response in Reflect Chat", {
       error: error instanceof Error ? error.message : String(error),
       userId,
@@ -615,5 +696,7 @@ Rules:
       code: "AI_CHAT_ERROR",
       message: "Unable to process message right now. Please try again.",
     });
+  } finally {
+    await redis.del(lockKey);
   }
 };

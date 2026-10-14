@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma.js";
 import { getCache, setCache, deleteCache } from "@/lib/redis.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import type { Prisma } from "@/generated/prisma/client.js";
 import type {
   GetAllowanceQueryInput,
@@ -62,6 +63,7 @@ export const getOrComputeAllowanceService = async (
 export const setOrUpdateAllowanceService = async (
   userId: string,
   input: SetAllowanceInput,
+  originClientId?: string,
 ) => {
   const { year, month, amount } = input;
 
@@ -94,6 +96,13 @@ export const setOrUpdateAllowanceService = async (
     deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
     deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
   ]);
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "ALLOWANCE",
+    originClientId,
+    entityId: allowance.id,
+  });
 
   return allowance;
 };

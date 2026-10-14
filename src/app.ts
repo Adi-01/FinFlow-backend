@@ -14,6 +14,7 @@ import categoryRoutes from "@/routes/category.routes.js";
 import paymentMethodRoutes from "@/routes/paymentMethod.routes.js";
 import reflectRoutes from "@/routes/reflect.routes.js";
 import profileRoutes from "@/routes/profile.routes.js";
+import syncRoutes from "@/routes/sync.routes.js";
 import { errorHandler } from "@/middleware/errorHandler.js";
 import { BASE_ROUTES } from "@/lib/routes.js";
 
@@ -48,6 +49,7 @@ app.use(BASE_ROUTES.transactionsBaseRoute, transactionRoutes);
 app.use(BASE_ROUTES.categoriesBaseRoute, categoryRoutes);
 app.use(BASE_ROUTES.paymentMethodsBaseRoute, paymentMethodRoutes);
 app.use(BASE_ROUTES.reflectBaseRoute, reflectRoutes);
+app.use(BASE_ROUTES.syncBaseRoute, syncRoutes);
 
 app.use(errorHandler);
 

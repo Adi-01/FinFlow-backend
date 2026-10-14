@@ -20,9 +20,11 @@ export const createExpenseController = async (req: Request, res: Response) => {
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const expense = await createExpenseService(
     req.user.id,
     req.body as CreateExpenseInput,
+    originClientId,
   );
   return res.success("Expense logged successfully.", expense, 201);
 };
@@ -49,10 +51,12 @@ export const updateExpenseController = async (req: Request, res: Response) => {
   }
 
   const id = typeof req.params.id === "string" ? req.params.id : "";
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const expense = await updateExpenseService(
     req.user.id,
     id,
     req.body as UpdateExpenseInput,
+    originClientId,
   );
   return res.success("Expense updated successfully.", expense);
 };
@@ -66,6 +70,7 @@ export const deleteExpenseController = async (req: Request, res: Response) => {
   }
 
   const id = typeof req.params.id === "string" ? req.params.id : "";
-  await deleteExpenseService(req.user.id, id);
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
+  await deleteExpenseService(req.user.id, id, originClientId);
   return res.success("Expense deleted successfully.", null);
 };

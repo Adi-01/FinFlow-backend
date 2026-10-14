@@ -30,9 +30,11 @@ export const updateProfileController = async (req: Request, res: Response) => {
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const profile = await updateProfileService(
     req.user.id,
     req.body as UpdateProfileInput,
+    originClientId,
   );
   return res.success("Profile updated successfully.", profile, 200);
 };
@@ -52,8 +54,13 @@ export const uploadAvatarController = async (req: Request, res: Response) => {
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   try {
-    const profile = await uploadAvatarService(req.user.id, req.file.buffer);
+    const profile = await uploadAvatarService(
+      req.user.id,
+      req.file.buffer,
+      originClientId,
+    );
     return res.success("Profile image updated successfully.", profile, 200);
   } catch (error) {
     await refundRateLimit("profile:avatar:upload", req.user.id);
@@ -69,7 +76,8 @@ export const removeAvatarController = async (req: Request, res: Response) => {
     });
   }
 
-  const profile = await removeAvatarService(req.user.id);
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
+  const profile = await removeAvatarService(req.user.id, originClientId);
   return res.success("Profile image removed successfully.", profile, 200);
 };
 

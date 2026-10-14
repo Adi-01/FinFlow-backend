@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma.js";
 import { ForbiddenError } from "@/errors/ForbiddenError.js";
 import { ConflictError } from "@/errors/ConflictError.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import type { CategoryType, CreateCategoryInput } from "@/validators/category.validator.js";
 
 // System defaults mapping with icons and vibrant colors for charts
@@ -71,9 +72,10 @@ export const getCategoriesService = async (userId: string, type?: CategoryType) 
 
 export const createCategoryService = async (
   userId: string,
-  input: CreateCategoryInput
+  input: CreateCategoryInput,
+  originClientId?: string,
 ) => {
-  return await prisma.$transaction(async (tx) => {
+  const category = await prisma.$transaction(async (tx) => {
     // Check count for quota limit
     const currentCount = await tx.userCategory.count({
       where: {
@@ -119,9 +121,22 @@ export const createCategoryService = async (
       },
     });
   });
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "CATEGORIES",
+    originClientId,
+    entityId: category.id,
+  });
+
+  return category;
 };
 
-export const deleteCategoryService = async (userId: string, id: string) => {
+export const deleteCategoryService = async (
+  userId: string,
+  id: string,
+  originClientId?: string,
+) => {
   const category = await prisma.userCategory.findFirst({
     where: {
       id,
@@ -144,7 +159,7 @@ export const deleteCategoryService = async (userId: string, id: string) => {
     });
   }
 
-  return await prisma.userCategory.update({
+  const deleted = await prisma.userCategory.update({
     where: { id },
     data: {
       isDeleted: true,
@@ -152,4 +167,13 @@ export const deleteCategoryService = async (userId: string, id: string) => {
       deletedBy: userId,
     },
   });
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "CATEGORIES",
+    originClientId,
+    entityId: id,
+  });
+
+  return deleted;
 };

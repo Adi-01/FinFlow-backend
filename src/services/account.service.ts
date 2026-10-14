@@ -3,13 +3,15 @@ import { prisma } from "@/lib/prisma.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
 import { BadRequestError } from "@/errors/BadRequestError.js";
 import { UnauthorizedError } from "@/errors/UnauthorizedError.js";
-import { deleteCacheByPattern } from "@/lib/redis.js";
+import { deleteCacheByPattern, redis } from "@/lib/redis.js";
 import {
   getUserSessions,
   getSession,
   revokeSession,
   revokeAllSessions,
+  isSessionRevoked,
 } from "@/lib/session.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import type {
   ChangePasswordInput,
   DeleteAccountInput,
@@ -92,6 +94,7 @@ export const revokeSessionService = async (
   userId: string,
   targetSessionId: string,
   currentSessionId?: string,
+  originClientId?: string,
 ) => {
   const existing = await getSession(userId, targetSessionId);
   if (!existing) {
@@ -103,6 +106,12 @@ export const revokeSessionService = async (
 
   await revokeSession(userId, targetSessionId);
 
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "PROFILE",
+    originClientId,
+  });
+
   return {
     revokedSessionId: targetSessionId,
     wasCurrent: Boolean(currentSessionId && targetSessionId === currentSessionId),
@@ -112,17 +121,59 @@ export const revokeSessionService = async (
 export const revokeOtherSessionsService = async (
   userId: string,
   currentSessionId?: string,
+  originClientId?: string,
 ) => {
-  const beforeSessions = await getUserSessions(userId);
-  const targetSessions = beforeSessions.filter(
-    (s) => !currentSessionId || s.sessionId !== currentSessionId,
-  );
+  // If the current session was already revoked concurrently by another tab/session,
+  // silently bail out so we don't accidentally execute a cross-revocation
+  if (currentSessionId && (await isSessionRevoked(userId, currentSessionId))) {
+    return {
+      revokedCount: 0,
+    };
+  }
 
-  await revokeAllSessions(userId, currentSessionId);
+  // Atomic mutex to prevent concurrent execution if Tab A and Tab B click simultaneously
+  const lockKey = `lock:revoke-sessions:${userId}`;
+  const acquired = await redis.set(lockKey, currentSessionId || "1", "EX", 10, "NX");
+  if (!acquired) {
+    // Another concurrent session revocation is in progress; silently no-op
+    return {
+      revokedCount: 0,
+    };
+  }
 
-  return {
-    revokedCount: targetSessions.length,
-  };
+  try {
+    // Double check session validity after acquiring lock
+    if (currentSessionId && (await isSessionRevoked(userId, currentSessionId))) {
+      return {
+        revokedCount: 0,
+      };
+    }
+
+    const beforeSessions = await getUserSessions(userId);
+    const targetSessions = beforeSessions.filter(
+      (s) => !currentSessionId || s.sessionId !== currentSessionId,
+    );
+
+    if (targetSessions.length === 0) {
+      return {
+        revokedCount: 0,
+      };
+    }
+
+    await revokeAllSessions(userId, currentSessionId);
+
+    await publishSyncEvent(userId, {
+      type: "INVALIDATE",
+      scope: "PROFILE",
+      originClientId,
+    });
+
+    return {
+      revokedCount: targetSessions.length,
+    };
+  } finally {
+    await redis.del(lockKey);
+  }
 };
 
 export const exportUserDataService = async (

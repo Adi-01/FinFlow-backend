@@ -6,8 +6,12 @@ import { UnauthorizedError } from "@/errors/UnauthorizedError.js";
 import type { RegisterInput, LoginInput } from "@/validators/auth.validator.js";
 
 import { saveSession } from "@/lib/session.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 
-export const registerUser = async (input: RegisterInput) => {
+export const registerUser = async (
+  input: RegisterInput,
+  sessionMeta?: { userAgent?: string; ip?: string },
+) => {
   const normalizedEmail = input.email.trim().toLowerCase();
   const existingUser = await prisma.user.findFirst({
     where: {
@@ -56,7 +60,12 @@ export const registerUser = async (input: RegisterInput) => {
 
   const sessionId = crypto.randomUUID();
   const sessionToken = await signSessionToken({ id: user.id, sessionId });
-  await saveSession(user.id, sessionId, {});
+  await saveSession(user.id, sessionId, sessionMeta || {});
+
+  await publishSyncEvent(user.id, {
+    type: "INVALIDATE",
+    scope: "PROFILE",
+  });
 
   return {
     user,
@@ -64,7 +73,10 @@ export const registerUser = async (input: RegisterInput) => {
   };
 };
 
-export const loginUser = async (input: LoginInput) => {
+export const loginUser = async (
+  input: LoginInput,
+  sessionMeta?: { userAgent?: string; ip?: string },
+) => {
   const normalizedEmail = input.email.trim().toLowerCase();
   const user = await prisma.user.findFirst({
     where: {
@@ -97,7 +109,12 @@ export const loginUser = async (input: LoginInput) => {
 
   const sessionId = crypto.randomUUID();
   const sessionToken = await signSessionToken({ id: user.id, sessionId });
-  await saveSession(user.id, sessionId, {});
+  await saveSession(user.id, sessionId, sessionMeta || {});
+
+  await publishSyncEvent(user.id, {
+    type: "INVALIDATE",
+    scope: "PROFILE",
+  });
 
   const {
     password,

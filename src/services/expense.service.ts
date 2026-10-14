@@ -5,6 +5,7 @@ import {
   deleteCache,
   deleteCacheByPattern,
 } from "@/lib/redis.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
 import type { Prisma } from "@/generated/prisma/client.js";
 import type {
@@ -21,6 +22,7 @@ import {
 export const createExpenseService = async (
   userId: string,
   input: CreateExpenseInput,
+  originClientId?: string,
 ) => {
   const parsedDate = new Date(input.date);
   const year = parsedDate.getUTCFullYear();
@@ -47,6 +49,13 @@ export const createExpenseService = async (
     deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
     deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
   ]);
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "EXPENSES",
+    originClientId,
+    entityId: expense.id,
+  });
 
   return expense;
 };
@@ -186,6 +195,7 @@ export const updateExpenseService = async (
   userId: string,
   id: string,
   input: UpdateExpenseInput,
+  originClientId?: string,
 ) => {
   const existing = await prisma.expense.findFirst({
     where: { id, userId, isDeleted: false },
@@ -246,10 +256,21 @@ export const updateExpenseService = async (
 
   await Promise.all(invalidations);
 
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "EXPENSES",
+    originClientId,
+    entityId: id,
+  });
+
   return updated;
 };
 
-export const deleteExpenseService = async (userId: string, id: string) => {
+export const deleteExpenseService = async (
+  userId: string,
+  id: string,
+  originClientId?: string,
+) => {
   const existing = await prisma.expense.findFirst({
     where: { id, userId, isDeleted: false },
   });
@@ -279,6 +300,13 @@ export const deleteExpenseService = async (userId: string, id: string) => {
     deleteCache(`cache:dashboard:${userId}:${existing.year}:${existing.month}`),
     deleteCache(`cache:allowance:summary:${userId}:${existing.year}:${existing.month}`),
   ]);
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "EXPENSES",
+    originClientId,
+    entityId: id,
+  });
 
   return deleted;
 };

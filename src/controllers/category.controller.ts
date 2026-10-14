@@ -28,9 +28,11 @@ export const createCategoryController = async (req: Request, res: Response) => {
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const category = await createCategoryService(
     req.user.id,
-    req.body as CreateCategoryInput
+    req.body as CreateCategoryInput,
+    originClientId,
   );
   return res.success("Category created successfully.", category, 201);
 };
@@ -44,6 +46,7 @@ export const deleteCategoryController = async (req: Request, res: Response) => {
   }
 
   const { id } = req.params;
-  await deleteCategoryService(req.user.id, id as string);
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
+  await deleteCategoryService(req.user.id, id as string, originClientId);
   return res.success("Category deleted successfully.", null, 200);
 };

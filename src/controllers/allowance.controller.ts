@@ -32,7 +32,12 @@ export const setAllowanceController = async (req: Request, res: Response) => {
     });
   }
 
-  const allowance = await setOrUpdateAllowanceService(req.user.id, req.body);
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
+  const allowance = await setOrUpdateAllowanceService(
+    req.user.id,
+    req.body,
+    originClientId,
+  );
   return res.success("Allowance updated successfully.", allowance);
 };
 

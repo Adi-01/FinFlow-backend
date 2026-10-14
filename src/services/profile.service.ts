@@ -6,6 +6,7 @@ import {
   uploadImageStream,
   deleteCloudinaryImage,
 } from "@/lib/cloudinary.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import type { UpdateProfileInput } from "@/validators/profile.validator.js";
 
 export const getProfileService = async (userId: string) => {
@@ -83,6 +84,7 @@ export const getProfileService = async (userId: string) => {
 export const updateProfileService = async (
   userId: string,
   input: UpdateProfileInput,
+  originClientId?: string,
 ) => {
   const user = await prisma.user.findFirst({
     where: {
@@ -300,6 +302,12 @@ export const updateProfileService = async (
     // Fail-open if redis is unavailable
   }
 
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "PROFILE",
+    originClientId,
+  });
+
   return {
     id: result.user.id,
     name: result.user.name,
@@ -322,6 +330,7 @@ export const updateProfileService = async (
 export const uploadAvatarService = async (
   userId: string,
   buffer: Buffer,
+  originClientId?: string,
 ) => {
   const user = await prisma.user.findFirst({
     where: {
@@ -366,10 +375,19 @@ export const uploadAvatarService = async (
     await deleteCloudinaryImage(oldProfileImageId);
   }
 
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "PROFILE",
+    originClientId,
+  });
+
   return getProfileService(userId);
 };
 
-export const removeAvatarService = async (userId: string) => {
+export const removeAvatarService = async (
+  userId: string,
+  originClientId?: string,
+) => {
   const user = await prisma.user.findFirst({
     where: {
       id: userId,
@@ -400,6 +418,12 @@ export const removeAvatarService = async (userId: string) => {
       },
     });
   }
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "PROFILE",
+    originClientId,
+  });
 
   return getProfileService(userId);
 };

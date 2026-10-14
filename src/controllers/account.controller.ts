@@ -57,10 +57,12 @@ export const revokeSessionController = async (
   }
 
   const { sessionId } = req.params as { sessionId: string };
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const result = await revokeSessionService(
     req.user.id,
     sessionId,
     req.user.sessionId,
+    originClientId,
   );
 
   return res.success("Session revoked successfully.", result, 200);
@@ -77,9 +79,11 @@ export const revokeOtherSessionsController = async (
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const result = await revokeOtherSessionsService(
     req.user.id,
     req.user.sessionId,
+    originClientId,
   );
 
   return res.success("All other sessions revoked successfully.", result, 200);

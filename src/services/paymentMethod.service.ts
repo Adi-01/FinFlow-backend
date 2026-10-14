@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma.js";
 import { ForbiddenError } from "@/errors/ForbiddenError.js";
 import { ConflictError } from "@/errors/ConflictError.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
+import { publishSyncEvent } from "@/lib/sync.js";
 import type { CreatePaymentMethodInput } from "@/validators/paymentMethod.validator.js";
 
 export const SYSTEM_PAYMENT_METHODS = [
@@ -35,9 +36,10 @@ export const getPaymentMethodsService = async (userId: string) => {
 
 export const createPaymentMethodService = async (
   userId: string,
-  input: CreatePaymentMethodInput
+  input: CreatePaymentMethodInput,
+  originClientId?: string,
 ) => {
-  return await prisma.$transaction(async (tx) => {
+  const paymentMethod = await prisma.$transaction(async (tx) => {
     const currentCount = await tx.userPaymentMethod.count({
       where: {
         userId,
@@ -77,9 +79,22 @@ export const createPaymentMethodService = async (
       },
     });
   });
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "PAYMENT_METHODS",
+    originClientId,
+    entityId: paymentMethod.id,
+  });
+
+  return paymentMethod;
 };
 
-export const deletePaymentMethodService = async (userId: string, id: string) => {
+export const deletePaymentMethodService = async (
+  userId: string,
+  id: string,
+  originClientId?: string,
+) => {
   const item = await prisma.userPaymentMethod.findFirst({
     where: {
       id,
@@ -102,8 +117,8 @@ export const deletePaymentMethodService = async (userId: string, id: string) => 
     });
   }
 
-  return await prisma.$transaction(async (tx) => {
-    const deletedItem = await tx.userPaymentMethod.update({
+  const deletedItem = await prisma.$transaction(async (tx) => {
+    const deleted = await tx.userPaymentMethod.update({
       where: { id },
       data: {
         isDeleted: true,
@@ -129,6 +144,15 @@ export const deletePaymentMethodService = async (userId: string, id: string) => 
       });
     }
 
-    return deletedItem;
+    return deleted;
   });
+
+  await publishSyncEvent(userId, {
+    type: "INVALIDATE",
+    scope: "PAYMENT_METHODS",
+    originClientId,
+    entityId: id,
+  });
+
+  return deletedItem;
 };

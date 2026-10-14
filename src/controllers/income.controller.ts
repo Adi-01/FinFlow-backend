@@ -20,9 +20,11 @@ export const createIncomeController = async (req: Request, res: Response) => {
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const income = await createIncomeService(
     req.user.id,
     req.body as CreateIncomeInput,
+    originClientId,
   );
   return res.success("Income logged successfully.", income, 201);
 };
@@ -49,10 +51,12 @@ export const updateIncomeController = async (req: Request, res: Response) => {
   }
 
   const id = typeof req.params.id === "string" ? req.params.id : "";
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const income = await updateIncomeService(
     req.user.id,
     id,
     req.body as UpdateIncomeInput,
+    originClientId,
   );
   return res.success("Income updated successfully.", income);
 };
@@ -66,6 +70,7 @@ export const deleteIncomeController = async (req: Request, res: Response) => {
   }
 
   const id = typeof req.params.id === "string" ? req.params.id : "";
-  await deleteIncomeService(req.user.id, id);
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
+  await deleteIncomeService(req.user.id, id, originClientId);
   return res.success("Income deleted successfully.", null);
 };

@@ -3,12 +3,15 @@ import app from "@/app.js";
 import { prisma } from "@/lib/prisma.js";
 import { redis } from "@/lib/redis.js";
 import { logger } from "@/lib/logger.js";
+import { initSyncSubscriber, closeSyncSubscriber } from "@/lib/sync.js";
 
-const server = app.listen(env.PORT, "0.0.0.0", () => {
+const server = app.listen(env.PORT, "0.0.0.0", async () => {
   logger.info(`Server running on http://0.0.0.0:${env.PORT}`, {
     port: env.PORT,
     nodeEnv: env.NODE_ENV,
   });
+
+  await initSyncSubscriber();
 });
 
 let isShuttingDown = false;
@@ -33,9 +36,10 @@ const gracefulShutdown = async (signal: string) => {
     }
 
     try {
-      logger.info("Closing Prisma and Redis connections...");
+      logger.info("Closing Prisma, Redis, and SSE Sync subscriber...");
       await Promise.all([
         prisma.$disconnect(),
+        closeSyncSubscriber(),
         redis.quit(),
       ]);
       logger.info("Graceful shutdown completed successfully.");

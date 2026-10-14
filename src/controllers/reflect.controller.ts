@@ -38,9 +38,11 @@ export const generateReflectReportController = async (
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const result = await generateReflectReportService(
     req.user.id,
     req.body as GenerateReflectInput,
+    originClientId,
   );
   return res.success("Reflect report generated successfully.", result, 201);
 };
@@ -53,9 +55,11 @@ export const chatReflectController = async (req: Request, res: Response) => {
     });
   }
 
+  const originClientId = (req.headers["x-client-id"] as string) || undefined;
   const result = await chatReflectService(
     req.user.id,
     req.body as ChatReflectInput,
+    originClientId,
   );
   return res.success("Chat response generated successfully.", result, 200);
 };

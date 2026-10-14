@@ -10,5 +10,6 @@ export const BASE_ROUTES = {
   categoriesBaseRoute: "/api/v1/categories",
   paymentMethodsBaseRoute: "/api/v1/payment-methods",
   reflectBaseRoute: "/api/v1/reflect",
+  syncBaseRoute: "/api/v1/sync",
 };
 
