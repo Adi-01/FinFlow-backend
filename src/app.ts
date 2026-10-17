@@ -30,7 +30,7 @@ app.get("/", (req, res) => {
   return res.success("API is working!");
 });
 
-app.get("/health", (req, res) => {
+app.get(["/health", "/api/v1/health"], (req, res) => {
   return res.success("Health check passed", {
     status: "ok",
     uptime: process.uptime(),
@@ -54,4 +54,3 @@ app.use(BASE_ROUTES.syncBaseRoute, syncRoutes);
 app.use(errorHandler);
 
 export default app;
-
