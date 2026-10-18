@@ -9,8 +9,9 @@ export interface SSEClient {
   res: Response;
 }
 
-// In-memory registry: userId -> Set of active SSEClient connections
-const activeConnections = new Map<string, Set<SSEClient>>();
+// In-memory registry: userId -> (clientId -> SSEClient)
+// Keying by clientId guarantees a single browser tab can NEVER have multiple active connections
+const activeConnections = new Map<string, Map<string, SSEClient>>();
 
 // Dedicated Redis subscriber instance created lazily ONLY when clients exist
 let subscriber: ReturnType<typeof redis.duplicate> | null = null;
@@ -22,8 +23,8 @@ const recentlyDispatched = new Set<string>();
 
 const getTotalActiveConnections = (): number => {
   let count = 0;
-  for (const set of activeConnections.values()) {
-    count += set.size;
+  for (const clientMap of activeConnections.values()) {
+    count += clientMap.size;
   }
   return count;
 };
@@ -32,24 +33,28 @@ const getTotalActiveConnections = (): number => {
  * Dispatch an event immediately to local in-memory clients with 0ms buffering.
  */
 const dispatchToLocalClients = (userId: string, event: SyncEvent): void => {
-  const clients = activeConnections.get(userId);
-  if (!clients || clients.size === 0) return;
+  const userClients = activeConnections.get(userId);
+  if (!userClients || userClients.size === 0) return;
 
   const payload = `data: ${JSON.stringify(event)}\n\n`;
 
-  for (const client of clients) {
+  for (const client of Array.from(userClients.values())) {
     // Exclude the client that originated the mutation
     if (event.originClientId && client.clientId === event.originClientId) {
       continue;
     }
 
     try {
+      if (!client.res.writable || client.res.writableEnded) {
+        removeClient(userId, client);
+        continue;
+      }
       client.res.write(payload);
-      // Flush socket buffers immediately so client receives data in real-time
       if (typeof (client.res as any).flush === "function") {
         (client.res as any).flush();
       }
     } catch (err) {
+      removeClient(userId, client);
       logger.error("[SSE Sync] Error writing event to client socket", { error: err });
     }
   }
@@ -74,9 +79,9 @@ export const startSyncSubscriber = async (): Promise<void> => {
     subscriber.on("pmessage", (_pattern: string, channel: string, message: string) => {
       try {
         const userId = channel.replace("user:sync:", "");
-        const clients = activeConnections.get(userId);
+        const userClients = activeConnections.get(userId);
 
-        if (!clients || clients.size === 0) return;
+        if (!userClients || userClients.size === 0) return;
 
         const event = JSON.parse(message) as SyncEvent;
 
@@ -100,15 +105,19 @@ export const startSyncSubscriber = async (): Promise<void> => {
     // Send SSE comment ping every 25s only while active connections exist
     if (!heartbeatInterval) {
       heartbeatInterval = setInterval(() => {
-        for (const [, clients] of activeConnections) {
-          for (const client of clients) {
+        for (const [userId, clientMap] of activeConnections) {
+          for (const client of Array.from(clientMap.values())) {
             try {
+              if (!client.res.writable || client.res.writableEnded) {
+                removeClient(userId, client);
+                continue;
+              }
               client.res.write(": ping\n\n");
               if (typeof (client.res as any).flush === "function") {
                 (client.res as any).flush();
               }
             } catch {
-              // Socket will be cleaned up on 'close' event
+              removeClient(userId, client);
             }
           }
         }
@@ -164,18 +173,32 @@ export const stopSyncSubscriber = async (): Promise<void> => {
 export const initSyncSubscriber = startSyncSubscriber;
 
 /**
- * Register a newly connected SSE client
+ * Register a newly connected SSE client.
+ * If a connection with the same clientId already exists (e.g. tab reconnected),
+ * the old connection is cleanly terminated and replaced to prevent connection leak.
  */
 export const registerClient = (
   userId: string,
   clientId: string,
   res: Response,
 ): SSEClient => {
-  const wasEmpty = getTotalActiveConnections() === 0;
-
   if (!activeConnections.has(userId)) {
-    activeConnections.set(userId, new Set());
+    activeConnections.set(userId, new Map());
   }
+
+  const userClients = activeConnections.get(userId)!;
+
+  // Cleanly replace any existing stale connection for this exact tab/client
+  const existingClient = userClients.get(clientId);
+  if (existingClient) {
+    logger.info(`[SSE Sync] Replaced existing connection for clientId: ${clientId}`);
+    try {
+      existingClient.res.end();
+    } catch {}
+    userClients.delete(clientId);
+  }
+
+  const wasEmpty = getTotalActiveConnections() === 0;
 
   const client: SSEClient = {
     id: crypto.randomUUID(),
@@ -183,7 +206,7 @@ export const registerClient = (
     res,
   };
 
-  activeConnections.get(userId)!.add(client);
+  userClients.set(clientId, client);
   const total = getTotalActiveConnections();
 
   logger.info(`[SSE Sync] Client connected. Total active connections: ${total}`, {
@@ -207,12 +230,18 @@ export const registerClient = (
  * Unregister a disconnected SSE client
  */
 export const removeClient = (userId: string, client: SSEClient): void => {
-  const clients = activeConnections.get(userId);
-  if (!clients) return;
+  const userClients = activeConnections.get(userId);
+  if (!userClients) return;
 
-  clients.delete(client);
+  // Only remove if this is the exact registered instance (avoids race condition with replacements)
+  const current = userClients.get(client.clientId);
+  if (current && current.id === client.id) {
+    userClients.delete(client.clientId);
+  } else if (!current) {
+    return;
+  }
 
-  if (clients.size === 0) {
+  if (userClients.size === 0) {
     activeConnections.delete(userId);
   }
 
@@ -286,8 +315,8 @@ export const publishSyncEvent = async (
  * Gracefully close subscriber and active connections during server shutdown
  */
 export const closeSyncSubscriber = async (): Promise<void> => {
-  for (const [, clients] of activeConnections) {
-    for (const client of clients) {
+  for (const [, clientMap] of activeConnections) {
+    for (const client of clientMap.values()) {
       try {
         client.res.write("event: shutdown\ndata: {}\n\n");
         client.res.end();

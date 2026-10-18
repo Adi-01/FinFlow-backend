@@ -46,7 +46,17 @@ export const sseSyncController = async (req: Request, res: Response): Promise<vo
     (res as any).flush();
   }
 
-  req.on("close", () => {
+  // Robustly handle connection termination across all socket and HTTP lifecycle events
+  let isCleanedUp = false;
+  const cleanup = () => {
+    if (isCleanedUp) return;
+    isCleanedUp = true;
     removeClient(req.user!.id, client);
-  });
+  };
+
+  req.on("close", cleanup);
+  res.on("close", cleanup);
+  res.on("finish", cleanup);
+  req.socket?.on("close", cleanup);
+  res.socket?.on("close", cleanup);
 };
