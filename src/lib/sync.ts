@@ -12,21 +12,34 @@ export interface SSEClient {
 // In-memory registry: userId -> Set of active SSEClient connections
 const activeConnections = new Map<string, Set<SSEClient>>();
 
-// Dedicated Redis subscriber instance for pub/sub mode
-const subscriber = redis.duplicate();
+// Dedicated Redis subscriber instance created lazily ONLY when clients exist
+let subscriber: ReturnType<typeof redis.duplicate> | null = null;
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let isSubscriberInitialized = false;
 
+const getTotalActiveConnections = (): number => {
+  let count = 0;
+  for (const set of activeConnections.values()) {
+    count += set.size;
+  }
+  return count;
+};
+
 /**
- * Initialize Redis Pub/Sub subscription and periodic heartbeat ping
+ * Start Redis subscriber and heartbeat ONLY when active clients connect.
  */
-export const initSyncSubscriber = async (): Promise<void> => {
-  if (isSubscriberInitialized) return;
+export const startSyncSubscriber = async (): Promise<void> => {
+  if (isSubscriberInitialized || subscriber) return;
 
   try {
+    subscriber = redis.duplicate({
+      lazyConnect: true,
+    });
+
+    await subscriber.connect();
     await subscriber.psubscribe("user:sync:*");
     isSubscriberInitialized = true;
-    logger.info("SSE Redis Pub/Sub subscriber listening on user:sync:*");
+    logger.info("SSE Redis Pub/Sub subscriber connected and listening on user:sync:*");
 
     subscriber.on("pmessage", (_pattern: string, channel: string, message: string) => {
       try {
@@ -52,24 +65,72 @@ export const initSyncSubscriber = async (): Promise<void> => {
       }
     });
 
-    // Send SSE comment ping every 25s to keep connections alive and prevent proxy timeouts
-    heartbeatInterval = setInterval(() => {
-      for (const [, clients] of activeConnections) {
-        for (const client of clients) {
-          try {
-            client.res.write(": ping\n\n");
-          } catch {
-            // Socket will be cleaned up on 'close' event
+    subscriber.on("error", (err: Error) => {
+      logger.error("SSE Redis subscriber error", { error: err.message });
+    });
+
+    // Send SSE comment ping every 25s only while active connections exist
+    if (!heartbeatInterval) {
+      heartbeatInterval = setInterval(() => {
+        for (const [, clients] of activeConnections) {
+          for (const client of clients) {
+            try {
+              client.res.write(": ping\n\n");
+            } catch {
+              // Socket will be cleaned up on 'close' event
+            }
           }
         }
-      }
-    }, 25000);
+      }, 25000);
+    }
   } catch (err) {
     logger.error("Failed to initialize SSE Redis Pub/Sub subscriber", {
       error: err instanceof Error ? err.message : String(err),
     });
+    if (subscriber) {
+      try {
+        subscriber.disconnect();
+      } catch {}
+      subscriber = null;
+    }
+    isSubscriberInitialized = false;
   }
 };
+
+/**
+ * Stop Redis subscriber and heartbeat when all clients disconnect.
+ * Drops the TCP socket to Redis, enabling Railway scale-to-zero.
+ */
+export const stopSyncSubscriber = async (): Promise<void> => {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+
+  if (subscriber) {
+    const sub = subscriber;
+    subscriber = null;
+    isSubscriberInitialized = false;
+
+    try {
+      await sub.punsubscribe("user:sync:*");
+      await sub.quit();
+      logger.info(
+        "Closed SSE Redis Pub/Sub subscriber (0 active connections - ready for scale-to-zero)",
+      );
+    } catch (err) {
+      try {
+        sub.disconnect();
+      } catch {}
+      logger.warn("Forced disconnect of SSE Redis subscriber", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+};
+
+// Backwards-compatibility alias
+export const initSyncSubscriber = startSyncSubscriber;
 
 /**
  * Register a newly connected SSE client
@@ -79,6 +140,8 @@ export const registerClient = (
   clientId: string,
   res: Response,
 ): SSEClient => {
+  const wasEmpty = getTotalActiveConnections() === 0;
+
   if (!activeConnections.has(userId)) {
     activeConnections.set(userId, new Set());
   }
@@ -94,8 +157,16 @@ export const registerClient = (
   logger.debug("Registered SSE client connection", {
     userId,
     clientId,
-    activeCount: activeConnections.get(userId)?.size ?? 0,
+    activeCount: getTotalActiveConnections(),
   });
+
+  if (wasEmpty) {
+    startSyncSubscriber().catch((err) => {
+      logger.error("Failed to start sync subscriber on first client connection", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
 
   return client;
 };
@@ -113,11 +184,24 @@ export const removeClient = (userId: string, client: SSEClient): void => {
     activeConnections.delete(userId);
   }
 
+  const remaining = getTotalActiveConnections();
+
   logger.debug("Removed SSE client connection", {
     userId,
     clientId: client.clientId,
-    remainingCount: activeConnections.get(userId)?.size ?? 0,
+    remainingCount: remaining,
   });
+
+  if (remaining === 0) {
+    stopSyncSubscriber().catch((err) => {
+      logger.error(
+        "Failed to stop sync subscriber when active connections reached 0",
+        {
+          error: err instanceof Error ? err.message : String(err),
+        },
+      );
+    });
+  }
 };
 
 /**
@@ -155,12 +239,6 @@ export const publishSyncEvent = async (
  * Gracefully close subscriber and active connections during server shutdown
  */
 export const closeSyncSubscriber = async (): Promise<void> => {
-  if (heartbeatInterval) {
-    clearInterval(heartbeatInterval);
-    heartbeatInterval = null;
-  }
-
-  // Gracefully close any active HTTP responses
   for (const [, clients] of activeConnections) {
     for (const client of clients) {
       try {
@@ -172,18 +250,5 @@ export const closeSyncSubscriber = async (): Promise<void> => {
     }
   }
   activeConnections.clear();
-
-  if (isSubscriberInitialized) {
-    try {
-      await subscriber.punsubscribe("user:sync:*");
-      await subscriber.quit();
-      isSubscriberInitialized = false;
-      logger.info("Closed SSE Redis Pub/Sub subscriber cleanly");
-    } catch (err) {
-      logger.error("Error closing SSE Redis subscriber", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  await stopSyncSubscriber();
 };
-
