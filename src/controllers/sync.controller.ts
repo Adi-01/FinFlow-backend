@@ -24,6 +24,10 @@ export const sseSyncController = async (req: Request, res: Response): Promise<vo
 
   const clientId = isValidClientId ? rawClientId : crypto.randomUUID();
 
+  // Disable Nagle's algorithm to eliminate TCP packet buffering delays for instant delivery
+  req.socket?.setNoDelay(true);
+  res.socket?.setNoDelay(true);
+
   // Set SSE streaming headers
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
@@ -34,13 +38,15 @@ export const sseSyncController = async (req: Request, res: Response): Promise<vo
 
   const client = registerClient(req.user.id, clientId, res);
 
-  // Send initial handshake confirmation
+  // Send initial handshake confirmation immediately
   res.write(
     `data: ${JSON.stringify({ type: "CONNECTED", clientId, timestamp: Date.now() })}\n\n`,
   );
+  if (typeof (res as any).flush === "function") {
+    (res as any).flush();
+  }
 
   req.on("close", () => {
     removeClient(req.user!.id, client);
   });
 };
-

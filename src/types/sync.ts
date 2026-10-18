@@ -9,6 +9,7 @@ export type SyncScope =
   | "REFLECT";
 
 export interface SyncEvent {
+  id?: string | undefined;
   type: "INVALIDATE";
   scope: SyncScope;
   originClientId?: string | undefined;
