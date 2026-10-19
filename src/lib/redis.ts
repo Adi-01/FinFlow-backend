@@ -1,26 +1,164 @@
-import { Redis } from "ioredis";
+import { Redis, type RedisOptions } from "ioredis";
 import { env } from "@/config/env.js";
 import { logger } from "@/lib/logger.js";
 
-export const redis = new Redis(env.REDIS_URL, {
-  maxRetriesPerRequest: 3,
-  retryStrategy(times) {
-    const delay = Math.min(times * 100, 3000);
+const redisOptions = {
+  maxRetriesPerRequest: 5,
+  retryStrategy(times: number) {
+    const delay = Math.min(times * 200, 3000);
     return delay;
   },
   lazyConnect: false,
-});
+};
 
-redis.on("connect", () => {
-  if (env.NODE_ENV !== "test") {
-    logger.info("Connected to Redis successfully");
-  }
-});
+// 60-second inactivity timeout: drops the persistent TCP socket to Redis,
+// enabling Railway scale-to-zero (serverless sleep) for both API and Redis containers.
+const IDLE_TIMEOUT_MS = 60 * 1000;
 
-redis.on("error", (err: Error) => {
-  if (env.NODE_ENV !== "test") {
-    logger.error("Redis connection error", { error: err.message });
+let client: Redis | null = null;
+let idleTimer: NodeJS.Timeout | null = null;
+const registeredListeners: Array<{
+  event: string | symbol;
+  listener: (...args: any[]) => void;
+}> = [];
+
+const resetIdleTimer = (): void => {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
   }
+  idleTimer = setTimeout(async () => {
+    if (client) {
+      const c = client;
+      client = null;
+      idleTimer = null;
+      try {
+        await c.quit();
+      } catch {
+        try {
+          c.disconnect();
+        } catch {}
+      }
+      logger.info(
+        "[Redis] Inactive for 60s. Disconnected Redis TCP socket for serverless scale-to-zero.",
+      );
+    }
+  }, IDLE_TIMEOUT_MS);
+  idleTimer.unref();
+};
+
+export const getClient = (): Redis => {
+  if (!client || client.status === "end" || client.status === "close") {
+    client = new Redis(env.REDIS_URL, redisOptions);
+
+    client.on("connect", () => {
+      if (env.NODE_ENV !== "test") {
+        logger.info("Connected to Redis successfully");
+      }
+    });
+
+    client.on("error", (err: Error) => {
+      if (env.NODE_ENV !== "test") {
+        logger.error("Redis connection error", { error: err.message });
+      }
+    });
+
+    for (const { event, listener } of registeredListeners) {
+      client.on(event as any, listener);
+    }
+  }
+
+  resetIdleTimer();
+  return client;
+};
+
+export const redis: Redis = new Proxy({} as Redis, {
+  get(target, prop, receiver) {
+    if (prop === "then") {
+      return undefined;
+    }
+    if (prop === "status") {
+      return client ? client.status : "close";
+    }
+    if (prop === "options") {
+      return redisOptions;
+    }
+    if (prop === "quit") {
+      return async () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+        if (!client || client.status === "end" || client.status === "close") {
+          return "OK";
+        }
+        const c = client;
+        client = null;
+        return c.quit();
+      };
+    }
+    if (prop === "disconnect") {
+      return (reconnect?: boolean) => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+        if (!client || client.status === "end" || client.status === "close") {
+          return;
+        }
+        const c = client;
+        client = null;
+        c.disconnect(reconnect);
+      };
+    }
+    if (prop === "duplicate") {
+      return (overrideOptions?: Partial<RedisOptions>) => {
+        return new Redis(env.REDIS_URL, {
+          ...redisOptions,
+          ...overrideOptions,
+        } as any);
+      };
+    }
+    if (prop === "on" || prop === "addListener") {
+      return (event: string | symbol, listener: (...args: any[]) => void) => {
+        registeredListeners.push({ event, listener });
+        if (client) {
+          client.on(event as any, listener);
+        }
+        return receiver;
+      };
+    }
+    if (prop === "off" || prop === "removeListener") {
+      return (event: string | symbol, listener: (...args: any[]) => void) => {
+        const idx = registeredListeners.findIndex(
+          (l) => l.event === event && l.listener === listener,
+        );
+        if (idx !== -1) {
+          registeredListeners.splice(idx, 1);
+        }
+        if (client) {
+          client.off(event as any, listener);
+        }
+        return receiver;
+      };
+    }
+
+    if (prop in Redis.prototype && typeof (Redis.prototype as any)[prop] === "function") {
+      return (...args: any[]) => {
+        const currentClient = getClient();
+        return (currentClient as any)[prop](...args);
+      };
+    }
+
+    const currentClient = getClient();
+    const val = (currentClient as any)[prop];
+    if (typeof val === "function") {
+      return (...args: any[]) => {
+        const c = getClient();
+        return (c as any)[prop](...args);
+      };
+    }
+    return val;
+  },
 });
 
 /**
