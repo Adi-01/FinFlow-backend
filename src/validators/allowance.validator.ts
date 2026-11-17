@@ -17,7 +17,7 @@ export const setAllowanceSchema = z
     month: z.number().int().min(1).max(12),
     amount: z
       .number({ required_error: "Allowance amount is required." })
-      .min(0, "Allowance amount cannot be negative.")
+      .positive("Allowance amount must be greater than zero.")
       .max(10_000_000, "Allowance amount cannot exceed 10,000,000.")
       .refine(
         (val) => /^\d+(\.\d{1,2})?$/.test(val.toString()),

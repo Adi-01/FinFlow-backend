@@ -25,7 +25,7 @@ export const getOrComputeAllowanceService = async (
     });
 
     if (existing) {
-      return { allowance: existing, needsPrompt: false };
+      return existing;
     }
 
     // 2. Fetch user settings for default monthly starting allowance
@@ -33,30 +33,26 @@ export const getOrComputeAllowanceService = async (
       where: { userId },
     });
 
-    const defaultAllowance = userSettings?.monthlyStartingAllowance ?? 0;
+    const baselineAllowance = userSettings?.monthlyStartingAllowance ?? 2000;
+    const initialAmount = baselineAllowance > 0 ? baselineAllowance : 2000;
 
-    // 3. If default allowance > 0, auto-initialize this month's allowance
-    if (defaultAllowance > 0) {
-      const newAllowance = await tx.monthlyAllowance.create({
-        data: {
-          userId,
-          year,
-          month,
-          amount: defaultAllowance,
-          isRollover: false,
-        },
-      });
+    // 3. Auto-initialize this month's allowance with baseline starting allowance
+    const newAllowance = await tx.monthlyAllowance.create({
+      data: {
+        userId,
+        year,
+        month,
+        amount: initialAmount,
+        isRollover: false,
+      },
+    });
 
-      await Promise.all([
-        deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
-        deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
-      ]);
+    await Promise.all([
+      deleteCache(`cache:allowance:summary:${userId}:${year}:${month}`),
+      deleteCache(`cache:dashboard:${userId}:${year}:${month}`),
+    ]);
 
-      return { allowance: newAllowance, needsPrompt: false };
-    }
-
-    // 4. If default allowance is 0 (or unset), prompt the user to configure
-    return { allowance: null, needsPrompt: true };
+    return newAllowance;
   });
 };
 
@@ -120,14 +116,12 @@ export const getAllowanceSummaryService = async (
     return cached;
   }
 
-  const allowanceData = await getOrComputeAllowanceService(userId, {
+  const allowance = await getOrComputeAllowanceService(userId, {
     year,
     month,
   });
 
-  const startingAllowance = allowanceData.allowance
-    ? allowanceData.allowance.amount
-    : 0;
+  const startingAllowance = allowance.amount;
 
   const incomeSum = await prisma.income.aggregate({
     _sum: { amount: true },
@@ -165,7 +159,6 @@ export const getAllowanceSummaryService = async (
     totalExpense,
     remainingBalance,
     extraIncome,
-    needsAllowancePrompt: allowanceData.needsPrompt,
   };
 
   // Populate Redis Cache (5 min TTL)

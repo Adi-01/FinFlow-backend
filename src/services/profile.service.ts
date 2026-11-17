@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma.js";
 import { NotFoundError } from "@/errors/NotFoundError.js";
 import { BadRequestError } from "@/errors/BadRequestError.js";
-import { redis } from "@/lib/redis.js";
+import { redis, deleteCache } from "@/lib/redis.js";
 import {
   uploadImageStream,
   deleteCloudinaryImage,
@@ -125,6 +125,16 @@ export const updateProfileService = async (
         message: "Date of birth cannot be removed once onboarding is complete.",
       });
     }
+
+    if (
+      input.monthlyStartingAllowance !== undefined &&
+      input.monthlyStartingAllowance <= 0
+    ) {
+      throw new BadRequestError({
+        code: "INVALID_ALLOWANCE",
+        message: "Monthly starting allowance must be greater than zero.",
+      });
+    }
   }
 
   // Validate default payment method if supplied
@@ -176,11 +186,20 @@ export const updateProfileService = async (
       ? input.currencySymbol.trim()
       : user.settings?.currencySymbol || "";
 
+  const effectiveAllowance =
+    input.monthlyStartingAllowance !== undefined
+      ? input.monthlyStartingAllowance
+      : user.settings?.monthlyStartingAllowance ?? 0;
+
   let resolvedIsOnboarding = user.isOnboarding;
 
   if (user.isOnboarding) {
-    // If user has provided both valid DOB and non-empty currency symbol, auto-complete onboarding
-    if (effectiveDob !== null && effectiveCurrencySymbol !== "") {
+    // If user has provided valid DOB, non-empty currency symbol, and monthly starting allowance > 0, auto-complete onboarding
+    if (
+      effectiveDob !== null &&
+      effectiveCurrencySymbol !== "" &&
+      effectiveAllowance > 0
+    ) {
       resolvedIsOnboarding = false;
     } else if (input.isOnboarding !== undefined) {
       resolvedIsOnboarding = input.isOnboarding;
@@ -258,6 +277,52 @@ export const updateProfileService = async (
           deletedBy: null,
         },
       });
+    }
+
+    // Auto-seed current active month allowance if baseline allowance is positive
+    if (effectiveAllowance > 0) {
+      const now = new Date();
+      const currentYear = now.getUTCFullYear();
+      const currentMonth = now.getUTCMonth() + 1;
+
+      const existingCurrentMonthAllowance = await tx.monthlyAllowance.findFirst({
+        where: {
+          userId,
+          year: currentYear,
+          month: currentMonth,
+          isDeleted: false,
+        },
+      });
+
+      if (!existingCurrentMonthAllowance) {
+        await tx.monthlyAllowance.upsert({
+          where: {
+            userId_year_month: {
+              userId,
+              year: currentYear,
+              month: currentMonth,
+            },
+          },
+          update: {
+            amount: effectiveAllowance,
+            isDeleted: false,
+            deletedAt: null,
+            deletedBy: null,
+          },
+          create: {
+            userId,
+            year: currentYear,
+            month: currentMonth,
+            amount: effectiveAllowance,
+            isRollover: false,
+          },
+        });
+
+        await Promise.all([
+          deleteCache(`cache:allowance:summary:${userId}:${currentYear}:${currentMonth}`),
+          deleteCache(`cache:dashboard:${userId}:${currentYear}:${currentMonth}`),
+        ]);
+      }
     }
 
     const [categories, paymentMethods] = await Promise.all([

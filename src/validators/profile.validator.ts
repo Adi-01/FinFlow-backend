@@ -25,7 +25,7 @@ export const updateProfileSchema = z.object({
     .optional(),
   monthlyStartingAllowance: z
     .number({ invalid_type_error: "Monthly starting allowance must be a number." })
-    .min(0, "Monthly starting allowance must be a positive number.")
+    .positive("Monthly starting allowance must be greater than zero.")
     .max(1000000000, "Monthly starting allowance cannot exceed 1,000,000,000.")
     .optional(),
   defaultPaymentMethod: z

@@ -16,14 +16,12 @@ export const getDashboardMetricsService = async (
     return cached;
   }
 
-  // 2. Allowance & Rollover Status
-  const allowanceData = await getOrComputeAllowanceService(userId, {
+  // 2. Monthly Allowance
+  const allowance = await getOrComputeAllowanceService(userId, {
     year,
     month,
   });
-  const startingAllowance = allowanceData.allowance
-    ? allowanceData.allowance.amount
-    : 0;
+  const startingAllowance = allowance.amount;
 
   // 3. Fetch Incomes for month
   const incomes = await prisma.income.findMany({
@@ -127,8 +125,7 @@ export const getDashboardMetricsService = async (
   const result = {
     year,
     month,
-    allowance: allowanceData.allowance,
-    needsAllowancePrompt: allowanceData.needsPrompt,
+    allowance,
     summary: {
       startingAllowance,
       totalIncome,

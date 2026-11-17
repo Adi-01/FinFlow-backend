@@ -269,7 +269,7 @@ export const generateReflectReportService = async (
     status: "GENERATING",
   });
 
-  const startingAllowance = allowanceData.allowance?.amount || 0;
+  const startingAllowance = allowanceData?.amount || 0;
   const totalIncome = incomes.reduce((sum, inc) => sum + inc.amount, 0);
   const totalSpent = expenses.reduce((sum, exp) => sum + exp.amount, 0);
   const remainingBalance = startingAllowance + totalIncome - totalSpent;
